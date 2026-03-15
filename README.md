@@ -22,3 +22,4 @@ Add a the `fc:frame` in `index.html` to make your root app URL sharable in feeds
 ```
 
 # castmint
+
