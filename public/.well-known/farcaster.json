@@ -1,1 +1,17 @@
-{}
+{
+  "accountAssociation": {
+    "header": "eyJmaWQiOjEwNzk5MjIsInR5cGUiOiJjdXN0b2R5Iiwia2V5IjoiMHg3NWNhQTExM0Y1NzJhNDA3RWRiOGE0OUZjZTFjZjk0MTBFZjE4ODFjIn0",
+    "payload": "eyJkb21haW4iOiJjYXN0bWludC1vbmUudmVyY2VsLmFwcCJ9",
+    "signature": "lxW7DF1fbRQk1G4gFSU9V4LLYDY933ORlkpSvdBIiGEjm+nLfj8eqRsAtFj+bpW67wVtzsDNCa+EN1sN0SH1DBw="
+  },
+  "frame": {
+    "version": "1",
+    "name": "CASTMINT",
+    "iconUrl": "https://castmint-one.vercel.app/icon.png",
+    "homeUrl": "https://castmint-one.vercel.app",
+    "imageUrl": "https://castmint-one.vercel.app/image.png",
+    "buttonTitle": "Mint NFTs on Base",
+    "splashImageUrl": "https://castmint-one.vercel.app/splash.png",
+    "splashBackgroundColor": "#070707"
+  }
+}
