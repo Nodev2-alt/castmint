@@ -7,11 +7,22 @@
   "frame": {
     "version": "1",
     "name": "CASTMINT",
+    "subtitle": "Mint NFTs on Base",
+    "description": "Create and mint NFTs on Base directly from Farcaster. Upload your art, set your price, and share with the world.",
     "iconUrl": "https://castmint-one.vercel.app/icon.png",
     "homeUrl": "https://castmint-one.vercel.app",
     "imageUrl": "https://castmint-one.vercel.app/image.png",
     "buttonTitle": "Mint NFTs on Base",
     "splashImageUrl": "https://castmint-one.vercel.app/splash.png",
-    "splashBackgroundColor": "#070707"
+    "splashBackgroundColor": "#070707",
+    "primaryCategory": "social",
+    "tags": ["nft", "mint", "base", "art"],
+    "tagline": "Mint NFTs on Base.",
+    "ogTitle": "CASTMINT - Mint NFTs on Base",
+    "ogDescription": "Create and mint NFTs on Base from Farcaster.",
+    "ogImageUrl": "https://castmint-one.vercel.app/image.png",
+    "heroImageUrl": "https://castmint-one.vercel.app/image.png",
+    "screenshotUrls": ["https://castmint-one.vercel.app/image.png"],
+    "noIndex": false
   }
 }
