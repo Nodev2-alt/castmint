@@ -49,25 +49,24 @@ async function deployNFTContract(
   walletAddress: string
 ): Promise<string> {
   // Deploy ERC-1155 via Thirdweb REST API
-  const res = await fetch("https://api.thirdweb.com/v1/deployer/contract", {
+  const res = await fetch("https://api.thirdweb.com/v1/deploy/8453/TokenERC1155", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-client-id": CLIENT_ID,
     },
     body: JSON.stringify({
-      contractType: "TokenERC1155",
-      chainId: 8453,
-      constructorParams: {
+      constructorParams: [
+        walletAddress,
         name,
         symbol,
-        contractURI: metadataUri,
-        defaultAdmin: walletAddress,
-        royaltyRecipient: PLATFORM_FEE_RECEIVER,
-        royaltyBps: 500,
-        primarySaleRecipient: walletAddress,
-        trustedForwarders: [],
-      },
+        metadataUri,
+        walletAddress,
+        PLATFORM_FEE_RECEIVER,
+        500,
+        [],
+        walletAddress,
+      ],
     }),
   });
   if (!res.ok) {
