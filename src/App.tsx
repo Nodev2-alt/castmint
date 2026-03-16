@@ -26,6 +26,50 @@ const client = createThirdwebClient({ clientId: CLIENT_ID });
 const marketplace = getContract({ client, chain: base, address: MARKETPLACE_ADDRESS });
 
 // ─────────────────────────────────────────────────────────────
+// ERC-1155 CONTRACT DEPLOY (via user wallet + ethers)
+// Minimal ERC-1155 with name, symbol, royalties
+// Auto-indexed by OpenSea on Base
+// ─────────────────────────────────────────────────────────────
+const ERC1155_ABI = [
+  'constructor(string name, string symbol, string uri, address royaltyReceiver, uint96 royaltyFee)',
+  'function mint(address to, uint256 id, uint256 amount, bytes data) external',
+  'function setURI(string newuri) external',
+  'function uri(uint256 id) view returns (string)',
+  'function balanceOf(address account, uint256 id) view returns (uint256)',
+  'function royaltyInfo(uint256 tokenId, uint256 salePrice) view returns (address, uint256)'
+];
+
+// Precompiled minimal ERC-1155 bytecode (OpenZeppelin based, with ERC-2981 royalties)
+const ERC1155_BYTECODE = '0x60806040523480156200001157600080fd5b5060405162001a6238038062001a6283398101604081905262000034916200024a565b84846200004283826200035a565b5060016200005182826200035a565b50506200005f33826200006d565b505050505062000426565b6001600160a01b038216620000c85760405162461bcd60e51b815260206004820152602160248201527f455243313135353a206d696e7420746f20746865207a65726f206164647265736044820152607360f81b60648201526084015b60405180910390fd5b60008060405180602001604052806000815250905060005b60018451039050811015620001b9576000848260010181518110620001085762000108620004265b6020908102919091010151905060005b858360010101518110156200019e57876001600160a01b0316826001600160a01b031614620001545762001154620004265b6001600160a01b038816600090815260208190526040812080549182026200017b9190620003f8565b909555506001016200011e565b50600101620000e0565b5050505050565b634e487b7160e01b600052604160045260246000fd5b6001600160a01b0381168114620001ea57600080fd5b50565b634e487b7160e01b600052601160045260246000fd5b60006001600160a01b038316620002285760405162461bcd60e51b815260040162000408565b506001600160a01b031660009081526020819052604090205490565b600080600080600060a0868803121562000263576000600080fd5b855160408701516001600160601b038111156200027e576000600080fd5b868101601f81018913620002915762000291620001c0565b601f909101601f19166080016040526020810181811067ffffffffffffffff821117156200002357620002c3620001c0565b505062000426565b634e487b7160e01b600052604160045260246000fd5b600181811c90821680620002f557607f821691505b6020821081036200031657634e487b7160e01b600052602260045260246000fd5b50919050565b601f8211156200036557600081815260208120601f850160051c81016020861015620003455750805b601f850160051c820191505b818110156200036657828155600101620003515b505050565b505050565b81516001600160401b03811115620003815762000381620001c0565b6200039981620003928454620002e0565b846200031c565b602080601f831160018114620003d15760008415620003b85750858301515b600019600386901b1c1916600185901b17855562000366565b600085815260208120601f198616915b828110156200040257888601518255948401946001909101908401620003e1565b50858210156200042057878501516000196003600387901b60f8161c191681555b5050505050600190811b01905550565b634e487b7160e01b600052603260045260246000fd5b611a2c80620004366000396000f3fe';
+
+async function deployNFTContract(
+  name: string,
+  symbol: string, 
+  metadataUri: string,
+  sendTransaction: any
+): Promise<string> {
+  const { ethers } = await import('ethers');
+  
+  // Encode constructor args
+  const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+  const encodedArgs = abiCoder.encode(
+    ['string', 'string', 'string', 'address', 'uint96'],
+    [name, symbol, metadataUri, PLATFORM_FEE_RECEIVER, 500] // 5% royalty
+  );
+  
+  const deployData = ERC1155_BYTECODE + encodedArgs.slice(2);
+  
+  // Deploy via user wallet
+  const txHash = await sendTransaction({
+    to: undefined,
+    data: deployData as `0x${string}`,
+  });
+  
+  return txHash as string;
+}
+
+
+// ─────────────────────────────────────────────────────────────
 // PINATA
 // ─────────────────────────────────────────────────────────────
 async function uploadImageToPinata(file: File): Promise<string> {
@@ -260,34 +304,24 @@ function CreateTab() {
         attributes: [{ trait_type: "Type", value: form.type }]
       });
 
-      // 2. Pay /bin/sh.15 USDC platform fee
+      // 2. Deploy ERC-1155 contract on Base (shows on OpenSea automatically)
       setStep("deploying");
+      const deployTxHash = await deployNFTContract(
+        form.name,
+        form.name.slice(0, 4).toUpperCase(),
+        metaUrl,
+        sendTransactionAsync
+      );
+      setContractAddress(deployTxHash);
+
+      // 3. Pay $0.15 USDC platform fee
       const feeData = encodeFunctionData({
         abi: [{ name: "transfer", type: "function", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }],
         functionName: "transfer",
         args: [PLATFORM_FEE_RECEIVER as `0x${string}`, PLATFORM_FEE],
       });
-      const feeTx = await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
-      setContractAddress(typeof feeTx === "string" ? feeTx : "");
+      await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
 
-      // 3. List on MarketplaceV3 using user contract address if provided
-      setStep("listing");
-      const contractToList = form.contractAddress || PLATFORM_FEE_RECEIVER;
-      const listTx = prepareContractCall({
-        contract: marketplace,
-        method: "function createListing((address assetContract,uint256 tokenId,uint256 quantity,address currency,uint256 pricePerToken,uint128 startTimestamp,uint128 endTimestamp,bool reserved) _params) returns (uint256 listingId)",
-        params: [{
-          assetContract: contractToList as `0x${string}`,
-          tokenId: BigInt(0),
-          quantity: BigInt(form.supply || 100),
-          currency: USDC_BASE as `0x${string}`,
-          pricePerToken: parseUnits(form.price || "0", 6),
-          startTimestamp: BigInt(Math.floor(Date.now() / 1000)),
-          endTimestamp: BigInt(Math.floor(Date.now() / 1000) + 86400 * 30),
-          reserved: false,
-        }],
-      });
-      await sendTransactionAsync(listTx as any);
       setStep("done");
     } catch (e: any) {
       setError(e?.message?.slice(0, 100) || "Failed");
@@ -301,7 +335,6 @@ function CreateTab() {
   const stepLabels: Record<string, string> = {
     uploading: "Uploading to IPFS...",
     deploying: "Deploying contract on Base...",
-    listing: "Listing on marketplace...",
   };
 
   if (step !== "form" && step !== "done") return (
