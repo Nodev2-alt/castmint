@@ -13,9 +13,11 @@
     "@farcaster/miniapp-sdk": "latest",
     "@farcaster/miniapp-wagmi-connector": "latest",
     "@tanstack/react-query": "5.45.1",
+    "dotenv": "^17.3.1",
     "ethers": "^6.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "thirdweb": "^5.119.1",
     "viem": "latest",
     "wagmi": "latest"
   },

@@ -1,18 +1,32 @@
 import { sdk } from "@farcaster/miniapp-sdk";
 import { useEffect, useState, useRef } from "react";
-import { useAccount, useConnect, useSendTransaction, usePublicClient } from "wagmi";
-import { parseUnits, encodeFunctionData, parseEther } from "viem";
+import { useAccount, useConnect } from "wagmi";
+import {
+  createThirdwebClient,
+  getContract,
+  prepareContractCall,
+} from "thirdweb";
+import { base } from "thirdweb/chains";
+import { useSendTransaction } from "thirdweb/react";
+import { getAllValidListings, buyFromListing } from "thirdweb/extensions/marketplace";
+
+import { parseUnits, encodeFunctionData } from "viem";
 
 // ─────────────────────────────────────────────────────────────
 // CONFIG
 // ─────────────────────────────────────────────────────────────
 const PLATFORM_FEE_RECEIVER = "0x2805e9dbce2839c5feae858723f9499f15fd88cf";
+const MARKETPLACE_ADDRESS = "0x974D2aDb187d2E100AF48d2A14Ce5e335F3A1A32";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-const PINATA_JWT = "YOUR_PINATA_JWT"; // get free at pinata.cloud
-const PLATFORM_FEE = parseUnits("0.15", 6); // $0.15 USDC
+const PLATFORM_FEE = parseUnits("0.15", 6);
+const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || "";
+const CLIENT_ID = import.meta.env.VITE_THIRDWEB_CLIENT_ID || "649b4215e19edce8273dded462e69e18";
+
+const client = createThirdwebClient({ clientId: CLIENT_ID });
+const marketplace = getContract({ client, chain: base, address: MARKETPLACE_ADDRESS });
 
 // ─────────────────────────────────────────────────────────────
-// PINATA UPLOAD
+// PINATA
 // ─────────────────────────────────────────────────────────────
 async function uploadImageToPinata(file: File): Promise<string> {
   const form = new FormData();
@@ -37,22 +51,23 @@ async function uploadMetaToPinata(meta: object): Promise<string> {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MOCK DATA
+// TYPES
 // ─────────────────────────────────────────────────────────────
-const MOCK_NFTS = [
-  { id: 1, name: "Void Bloom #001", creator: "presdency.eth", image: "https://api.dicebear.com/9.x/shapes/svg?seed=voidbloom&backgroundColor=0a0a0a&shapeColor=ff3cac", price: "0.05", token: "ETH", type: "sale", supply: 100, minted: 34 },
-  { id: 2, name: "Base Genesis", creator: "bankrdex.eth", image: "https://api.dicebear.com/9.x/shapes/svg?seed=basegenesis&backgroundColor=0a0a0a&shapeColor=00d4ff", price: "0", token: "FREE", type: "drop", supply: 500, minted: 312 },
-  { id: 3, name: "Onchain Dreams", creator: "caster.eth", image: "https://api.dicebear.com/9.x/shapes/svg?seed=onchaindreams&backgroundColor=0a0a0a&shapeColor=7b2fff", price: "2.00", token: "USDC", type: "sale", supply: 50, minted: 12 },
-  { id: 4, name: "Farcaster Soul", creator: "warp.eth", image: "https://api.dicebear.com/9.x/shapes/svg?seed=farcastersoul&backgroundColor=0a0a0a&shapeColor=ff6b35", price: "0", token: "FREE", type: "drop", supply: 1000, minted: 780 },
-];
-
-type NFT = typeof MOCK_NFTS[0] & { contractAddress?: string; tokenId?: number };
+type Listing = {
+  id: bigint;
+  creatorAddress: string;
+  assetContractAddress: string;
+  tokenId: bigint;
+  quantity: bigint;
+  currencyContractAddress: string;
+  currencyValuePerToken: { displayValue: string; symbol: string };
+  asset: { name?: string; description?: string; image?: string };
+};
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 function trunc(s: string, n = 16) { return s?.length > n ? s.slice(0, n) + "…" : s; }
-function pct(minted: number, supply: number) { return Math.min(100, Math.round((minted / supply) * 100)); }
 
 function Badge({ type }: { type: string }) {
   const color = type === "drop" ? "#00d4ff" : "#ff3cac";
@@ -66,9 +81,13 @@ function Badge({ type }: { type: string }) {
 // ─────────────────────────────────────────────────────────────
 // NFT CARD
 // ─────────────────────────────────────────────────────────────
-function NFTCard({ nft, onMint }: { nft: NFT; onMint: (n: NFT) => void }) {
+function NFTCard({ listing, onBuy }: { listing: Listing; onBuy: (l: Listing) => void }) {
   const [hovered, setHovered] = useState(false);
-  const progress = pct(nft.minted, nft.supply);
+  const price = listing.currencyValuePerToken?.displayValue || "0";
+  const symbol = listing.currencyValuePerToken?.symbol || "ETH";
+  const image = listing.asset?.image || `https://api.dicebear.com/9.x/shapes/svg?seed=${listing.id}&backgroundColor=0a0a0a&shapeColor=ff3cac`;
+  const name = listing.asset?.name || `NFT #${listing.id}`;
+
   return (
     <div
       onMouseEnter={() => setHovered(true)}
@@ -76,33 +95,22 @@ function NFTCard({ nft, onMint }: { nft: NFT; onMint: (n: NFT) => void }) {
       style={{ background: hovered ? "#111" : "#0d0d0d", border: `1px solid ${hovered ? "#333" : "#1a1a1a"}`, borderRadius: 12, overflow: "hidden", transition: "all 0.2s ease", transform: hovered ? "translateY(-2px)" : "none" }}
     >
       <div style={{ position: "relative" }}>
-        <img src={nft.image} alt={nft.name} style={{ width: "100%", height: 160, objectFit: "cover", display: "block" }} />
-        <div style={{ position: "absolute", top: 8, right: 8 }}><Badge type={nft.type} /></div>
+        <img src={image} alt={name} style={{ width: "100%", height: 160, objectFit: "cover", display: "block" }} />
+        <div style={{ position: "absolute", top: 8, right: 8 }}><Badge type="sale" /></div>
       </div>
       <div style={{ padding: "12px 14px 14px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
           <div>
-            <div style={{ color: "#fff", fontWeight: 700, fontSize: 13, fontFamily: "'DM Mono', monospace" }}>{trunc(nft.name, 16)}</div>
-            <div style={{ color: "#555", fontSize: 11, marginTop: 2, fontFamily: "'DM Mono', monospace" }}>by {trunc(nft.creator, 14)}</div>
+            <div style={{ color: "#fff", fontWeight: 700, fontSize: 13, fontFamily: "'DM Mono', monospace" }}>{trunc(name, 16)}</div>
+            <div style={{ color: "#555", fontSize: 11, marginTop: 2, fontFamily: "'DM Mono', monospace" }}>by {trunc(listing.creatorAddress, 10)}</div>
           </div>
-          <div style={{ color: nft.token === "FREE" ? "#00ff88" : "#ff3cac", fontWeight: 800, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
-            {nft.token === "FREE" ? "FREE" : `${nft.price} ${nft.token}`}
-          </div>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-            <span style={{ color: "#444", fontSize: 10, fontFamily: "'DM Mono', monospace" }}>{nft.minted}/{nft.supply}</span>
-            <span style={{ color: "#444", fontSize: 10, fontFamily: "'DM Mono', monospace" }}>{progress}%</span>
-          </div>
-          <div style={{ height: 3, background: "#1a1a1a", borderRadius: 2, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${progress}%`, background: "linear-gradient(90deg, #ff3cac, #7b2fff)", borderRadius: 2 }} />
-          </div>
+          <div style={{ color: "#ff3cac", fontWeight: 800, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>{price} {symbol}</div>
         </div>
         <button
-          onClick={() => onMint(nft)}
+          onClick={() => onBuy(listing)}
           style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", background: hovered ? "linear-gradient(135deg, #ff3cac, #7b2fff)" : "#1a1a1a", color: hovered ? "#fff" : "#666", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1, transition: "all 0.2s ease" }}
         >
-          {nft.token === "FREE" ? "MINT FREE" : "MINT NOW"}
+          BUY NOW
         </button>
       </div>
     </div>
@@ -110,22 +118,28 @@ function NFTCard({ nft, onMint }: { nft: NFT; onMint: (n: NFT) => void }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MINT MODAL
+// BUY MODAL
 // ─────────────────────────────────────────────────────────────
-function MintModal({ nft, onClose }: { nft: NFT; onClose: () => void }) {
-  const [step, setStep] = useState<"confirm" | "paying" | "minting" | "done">("confirm");
-  const [shared, setShared] = useState(false);
+function BuyModal({ listing, onClose }: { listing: Listing; onClose: () => void }) {
+  const [step, setStep] = useState<"confirm" | "buying" | "done">("confirm");
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
+  const [shared, setShared] = useState(false);
   const { address } = useAccount();
   const { sendTransactionAsync } = useSendTransaction();
 
-  const handleMint = async () => {
+  const price = listing.currencyValuePerToken?.displayValue || "0";
+  const symbol = listing.currencyValuePerToken?.symbol || "ETH";
+  const image = listing.asset?.image || `https://api.dicebear.com/9.x/shapes/svg?seed=${listing.id}`;
+  const name = listing.asset?.name || `NFT #${listing.id}`;
+
+  const handleBuy = async () => {
     if (!address) return;
     setError("");
     try {
-      // Step 1: Pay $0.15 USDC platform fee
-      setStep("paying");
+      setStep("buying");
+
+      // Pay $0.15 USDC platform fee
       const feeData = encodeFunctionData({
         abi: [{ name: "transfer", type: "function", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }],
         functionName: "transfer",
@@ -133,26 +147,15 @@ function MintModal({ nft, onClose }: { nft: NFT; onClose: () => void }) {
       });
       await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
 
-      // Step 2: Mint NFT (ETH payment if not free)
-      setStep("minting");
-      let hash = "";
-      if (nft.contractAddress) {
-        const mintData = encodeFunctionData({
-          abi: [{ name: "claim", type: "function", inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }, { name: "quantity", type: "uint256" }], outputs: [] }],
-          functionName: "claim",
-          args: [address as `0x${string}`, BigInt(nft.tokenId || 0), BigInt(1)],
-        });
-        const tx = await sendTransactionAsync({
-          to: nft.contractAddress as `0x${string}`,
-          data: mintData,
-          value: nft.token === "ETH" ? parseEther(nft.price) : BigInt(0),
-        });
-        hash = tx;
-      } else {
-        // Demo flow
-        await new Promise(r => setTimeout(r, 1500));
-      }
-      setTxHash(hash);
+      // Buy from marketplace
+      const tx = buyFromListing({
+        contract: marketplace,
+        listingId: listing.id,
+        quantity: BigInt(1),
+        recipient: address,
+      });
+      const result = await sendTransactionAsync(tx as any);
+      setTxHash(typeof result === "string" ? result : "");
       setStep("done");
     } catch (e: any) {
       setError(e?.message?.slice(0, 80) || "Transaction failed");
@@ -160,45 +163,38 @@ function MintModal({ nft, onClose }: { nft: NFT; onClose: () => void }) {
     }
   };
 
-  const handleShare = () => {
-    setShared(true);
-    sdk.actions.openUrl(`https://warpcast.com/~/compose?text=${encodeURIComponent(`Just minted "${nft.name}" on @castmint — ${nft.token === "FREE" ? "Free Drop" : "NFT Sale"} 🎨\n\nhttps://castmint.xyz`)}`);
-  };
-
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, backdropFilter: "blur(8px)", padding: 20 }}>
       <div style={{ background: "#0d0d0d", border: "1px solid #222", borderRadius: 16, padding: 24, maxWidth: 340, width: "100%", position: "relative" }}>
         <button onClick={onClose} style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", color: "#555", fontSize: 18, cursor: "pointer" }}>✕</button>
 
-        {(step === "confirm") && (
+        {step === "confirm" && (
           <>
-            <img src={nft.image} alt="" style={{ width: "100%", height: 180, objectFit: "cover", borderRadius: 10, marginBottom: 16 }} />
-            <div style={{ color: "#fff", fontWeight: 800, fontSize: 16, fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>{nft.name}</div>
-            <div style={{ color: "#555", fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 20 }}>by {nft.creator}</div>
+            <img src={image} alt="" style={{ width: "100%", height: 180, objectFit: "cover", borderRadius: 10, marginBottom: 16 }} />
+            <div style={{ color: "#fff", fontWeight: 800, fontSize: 16, fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>{name}</div>
+            <div style={{ color: "#555", fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 20 }}>by {trunc(listing.creatorAddress, 16)}</div>
             <div style={{ background: "#111", borderRadius: 10, padding: 14, marginBottom: 16 }}>
-              {[["NFT Price", nft.token === "FREE" ? "Free" : `${nft.price} ${nft.token}`], ["Platform Fee", "$0.15 USDC"], ["Network", "Base"]].map(([l, v]) => (
+              {[["Price", `${price} ${symbol}`], ["Platform Fee", "$0.15 USDC"], ["Network", "Base"]].map(([l, v]) => (
                 <div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12, fontFamily: "'DM Mono', monospace" }}>
                   <span style={{ color: "#555" }}>{l}</span><span style={{ color: "#fff" }}>{v}</span>
                 </div>
               ))}
               <div style={{ borderTop: "1px solid #1a1a1a", paddingTop: 8, display: "flex", justifyContent: "space-between", fontSize: 13, fontFamily: "'DM Mono', monospace" }}>
                 <span style={{ color: "#888" }}>Total</span>
-                <span style={{ color: "#ff3cac", fontWeight: 800 }}>{nft.token === "FREE" ? "$0.15 USDC + gas" : `${nft.price} ${nft.token} + $0.15 + gas`}</span>
+                <span style={{ color: "#ff3cac", fontWeight: 800 }}>{price} {symbol} + $0.15</span>
               </div>
             </div>
             {error && <div style={{ color: "#ff3cac", fontSize: 11, fontFamily: "'DM Mono', monospace", marginBottom: 12, textAlign: "center" }}>{error}</div>}
-            <button onClick={handleMint} style={{ width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #ff3cac, #7b2fff)", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1 }}>
-              CONFIRM MINT
+            <button onClick={handleBuy} style={{ width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #ff3cac, #7b2fff)", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1 }}>
+              CONFIRM PURCHASE
             </button>
           </>
         )}
 
-        {(step === "paying" || step === "minting") && (
+        {step === "buying" && (
           <div style={{ textAlign: "center", padding: "40px 0" }}>
             <div style={{ fontSize: 40, marginBottom: 16, display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</div>
-            <div style={{ color: "#fff", fontWeight: 700, fontFamily: "'DM Mono', monospace", fontSize: 14 }}>
-              {step === "paying" ? "Paying platform fee..." : "Minting on Base..."}
-            </div>
+            <div style={{ color: "#fff", fontWeight: 700, fontFamily: "'DM Mono', monospace", fontSize: 14 }}>Processing on Base...</div>
             <div style={{ color: "#555", fontSize: 12, fontFamily: "'DM Mono', monospace", marginTop: 8 }}>Confirm in wallet</div>
           </div>
         )}
@@ -206,15 +202,17 @@ function MintModal({ nft, onClose }: { nft: NFT; onClose: () => void }) {
         {step === "done" && (
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>🎉</div>
-            <div style={{ color: "#00ff88", fontWeight: 800, fontFamily: "'DM Mono', monospace", fontSize: 16, marginBottom: 6 }}>MINTED!</div>
-            <div style={{ color: "#555", fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 20 }}>{nft.name} is in your wallet</div>
+            <div style={{ color: "#00ff88", fontWeight: 800, fontFamily: "'DM Mono', monospace", fontSize: 16, marginBottom: 6 }}>PURCHASED!</div>
+            <div style={{ color: "#555", fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 20 }}>{name} is in your wallet</div>
             {txHash && (
               <div onClick={() => sdk.actions.openUrl(`https://basescan.org/tx/${txHash}`)}
                 style={{ color: "#7b2fff", fontFamily: "'DM Mono', monospace", fontSize: 11, marginBottom: 16, cursor: "pointer" }}>
                 View on Basescan ↗
               </div>
             )}
-            <button onClick={handleShare} style={{ width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: shared ? "#1a1a1a" : "linear-gradient(135deg, #7b2fff, #00d4ff)", color: shared ? "#555" : "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1 }}>
+            <button
+              onClick={() => { setShared(true); sdk.actions.openUrl(`https://warpcast.com/~/compose?text=${encodeURIComponent(`Just bought "${name}" on @castmint 🎨\n\nhttps://castmint-one.vercel.app`)}`); }}
+              style={{ width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: shared ? "#1a1a1a" : "linear-gradient(135deg, #7b2fff, #00d4ff)", color: shared ? "#555" : "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1 }}>
               {shared ? "✓ SHARED" : "SHARE ON FARCASTER"}
             </button>
           </div>
@@ -229,14 +227,15 @@ function MintModal({ nft, onClose }: { nft: NFT; onClose: () => void }) {
 // ─────────────────────────────────────────────────────────────
 function CreateTab() {
   const { address } = useAccount();
-  const { sendTransactionAsync } = useSendTransaction();
-  const [form, setForm] = useState({ name: "", desc: "", price: "", token: "ETH", supply: "100", type: "sale" });
+  const { connect, connectors } = useConnect();
+  const [form, setForm] = useState({ name: "", desc: "", price: "", token: "USDC", supply: "100", type: "sale" });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [step, setStep] = useState<"form" | "uploading" | "deploying" | "done">("form");
-  const [contractAddress, setContractAddress] = useState("");
+  const [step, setStep] = useState<"form" | "uploading" | "deploying" | "listing" | "done">("form");
   const [error, setError] = useState("");
+  const [contractAddress, setContractAddress] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const { sendTransactionAsync } = useSendTransaction();
 
   const handleImage = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -251,26 +250,46 @@ function CreateTab() {
     if (!address || !form.name || !imageFile) return;
     setError("");
     try {
-      // 1. Upload image to Pinata
       setStep("uploading");
       const imageUrl = await uploadImageToPinata(imageFile);
-      const metaUrl = await uploadMetaToPinata({
-        name: form.name, description: form.desc, image: imageUrl,
-        attributes: [{ trait_type: "Type", value: form.type }, { trait_type: "Price", value: form.price || "0" }]
-      });
+      await uploadMetaToPinata({ name: form.name, description: form.desc, image: imageUrl });
 
-      // 2. Pay platform fee ($0.15 USDC) to create
       setStep("deploying");
-      const feeData = encodeFunctionData({
-        abi: [{ name: "transfer", type: "function", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }],
-        functionName: "transfer",
-        args: [PLATFORM_FEE_RECEIVER as `0x${string}`, PLATFORM_FEE],
+      const deployed = await deployERC1155Contract({
+        client,
+        chain: base,
+        account: { address: address as `0x${string}`, sendTransaction: sendTransactionAsync as any } as any,
+        params: {
+          name: form.name,
+          symbol: form.name.slice(0, 4).toUpperCase(),
+          description: form.desc,
+          image: imageUrl,
+          primary_sale_recipient: address,
+          fee_recipient: PLATFORM_FEE_RECEIVER,
+          seller_fee_basis_points: 500,
+        },
       });
-      const tx = await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
-      setContractAddress(tx);
+      setContractAddress(deployed);
+
+      setStep("listing");
+      const listTx = prepareContractCall({
+        contract: marketplace,
+        method: "function createListing((address assetContract,uint256 tokenId,uint256 quantity,address currency,uint256 pricePerToken,uint128 startTimestamp,uint128 endTimestamp,bool reserved) _params) returns (uint256 listingId)",
+        params: [{
+          assetContract: deployed as `0x${string}`,
+          tokenId: BigInt(0),
+          quantity: BigInt(form.supply || 100),
+          currency: USDC_BASE as `0x${string}`,
+          pricePerToken: parseUnits(form.price || "0", 6),
+          startTimestamp: BigInt(Math.floor(Date.now() / 1000)),
+          endTimestamp: BigInt(Math.floor(Date.now() / 1000) + 86400 * 30),
+          reserved: false,
+        }],
+      });
+      await sendTransactionAsync(listTx as any);
       setStep("done");
     } catch (e: any) {
-      setError(e?.message?.slice(0, 80) || "Failed");
+      setError(e?.message?.slice(0, 100) || "Failed");
       setStep("form");
     }
   };
@@ -278,20 +297,32 @@ function CreateTab() {
   const inp: React.CSSProperties = { width: "100%", padding: "10px 12px", background: "#0d0d0d", border: "1px solid #222", borderRadius: 8, color: "#fff", fontFamily: "'DM Mono', monospace", fontSize: 13, outline: "none", boxSizing: "border-box" };
   const lbl: React.CSSProperties = { color: "#555", fontSize: 11, fontFamily: "'DM Mono', monospace", letterSpacing: 1, marginBottom: 6, display: "block" };
 
-  if (step === "uploading" || step === "deploying") return (
+  const stepLabels: Record<string, string> = {
+    uploading: "Uploading to IPFS...",
+    deploying: "Deploying contract on Base...",
+    listing: "Listing on marketplace...",
+  };
+
+  if (step !== "form" && step !== "done") return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 320, gap: 16 }}>
       <div style={{ fontSize: 36, display: "inline-block", animation: "spin 1s linear infinite" }}>⟳</div>
-      <div style={{ color: "#fff", fontFamily: "'DM Mono', monospace", fontSize: 14 }}>{step === "uploading" ? "Uploading to IPFS..." : "Publishing on Base..."}</div>
-      <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{step === "deploying" ? "Confirm in wallet" : "Pinning to Pinata..."}</div>
+      <div style={{ color: "#fff", fontFamily: "'DM Mono', monospace", fontSize: 14 }}>{stepLabels[step]}</div>
+      <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>Confirm in wallet if prompted</div>
     </div>
   );
 
   if (step === "done") return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 320, gap: 12, textAlign: "center" }}>
       <div style={{ fontSize: 48 }}>🚀</div>
-      <div style={{ color: "#00ff88", fontFamily: "'DM Mono', monospace", fontWeight: 800, fontSize: 16 }}>PUBLISHED!</div>
-      <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{form.name} is live on Base</div>
-      <button onClick={() => { setStep("form"); setForm({ name: "", desc: "", price: "", token: "ETH", supply: "100", type: "sale" }); setPreview(null); setImageFile(null); }}
+      <div style={{ color: "#00ff88", fontFamily: "'DM Mono', monospace", fontWeight: 800, fontSize: 16 }}>LISTED!</div>
+      <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{form.name} is live on CASTMINT</div>
+      {contractAddress && (
+        <div onClick={() => sdk.actions.openUrl(`https://basescan.org/address/${contractAddress}`)}
+          style={{ color: "#7b2fff", fontFamily: "'DM Mono', monospace", fontSize: 11, cursor: "pointer" }}>
+          {trunc(contractAddress, 20)} ↗
+        </div>
+      )}
+      <button onClick={() => { setStep("form"); setForm({ name: "", desc: "", price: "", token: "USDC", supply: "100", type: "sale" }); setPreview(null); setImageFile(null); }}
         style={{ marginTop: 8, padding: "10px 24px", borderRadius: 8, border: "1px solid #333", background: "none", color: "#fff", cursor: "pointer", fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
         CREATE ANOTHER
       </button>
@@ -322,7 +353,7 @@ function CreateTab() {
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <div style={{ flex: 2 }}><label style={lbl}>PRICE</label><input style={inp} placeholder={form.type === "drop" ? "0 (free)" : "0.05"} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
+        <div style={{ flex: 2 }}><label style={lbl}>PRICE</label><input style={inp} placeholder="0.05" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
         <div style={{ flex: 1 }}><label style={lbl}>TOKEN</label>
           <select style={inp} value={form.token} onChange={e => setForm({ ...form, token: e.target.value })}>
             <option>ETH</option><option>USDC</option><option>DEGEN</option>
@@ -333,7 +364,7 @@ function CreateTab() {
       <div><label style={lbl}>SUPPLY</label><input style={inp} type="number" placeholder="100" value={form.supply} onChange={e => setForm({ ...form, supply: e.target.value })} /></div>
 
       <div style={{ background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 10, padding: 12 }}>
-        {[["Platform fee", "$0.15 USDC per mint"], ["Secondary royalty", "5% → you"], ["Storage", "IPFS via Pinata"]].map(([l, v]) => (
+        {[["Platform fee", "$0.15 USDC per mint"], ["Secondary royalty", "5% → you"], ["Marketplace", "CASTMINT on Base"]].map(([l, v]) => (
           <div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, fontFamily: "'DM Mono', monospace" }}>
             <span style={{ color: "#444" }}>{l}</span><span style={{ color: "#666" }}>{v}</span>
           </div>
@@ -342,11 +373,66 @@ function CreateTab() {
 
       {error && <div style={{ color: "#ff3cac", fontSize: 11, fontFamily: "'DM Mono', monospace", textAlign: "center" }}>{error}</div>}
 
-      <button onClick={handlePublish} disabled={!form.name || !preview || !address}
-        style={{ width: "100%", padding: "13px 0", borderRadius: 10, border: "none", background: form.name && preview && address ? "linear-gradient(135deg, #ff3cac, #7b2fff)" : "#1a1a1a", color: form.name && preview && address ? "#fff" : "#333", fontWeight: 800, fontSize: 14, cursor: form.name && preview && address ? "pointer" : "not-allowed", fontFamily: "'DM Mono', monospace", letterSpacing: 2 }}>
-        {!address ? "CONNECT WALLET FIRST" : "PUBLISH NFT"}
-      </button>
+      {!address ? (
+        <button onClick={() => connect({ connector: connectors[0] })} style={{ width: "100%", padding: "13px 0", borderRadius: 10, border: "1px solid #333", background: "none", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+          CONNECT WALLET
+        </button>
+      ) : (
+        <button onClick={handlePublish} disabled={!form.name || !preview}
+          style={{ width: "100%", padding: "13px 0", borderRadius: 10, border: "none", background: form.name && preview ? "linear-gradient(135deg, #ff3cac, #7b2fff)" : "#1a1a1a", color: form.name && preview ? "#fff" : "#333", fontWeight: 800, fontSize: 14, cursor: form.name && preview ? "pointer" : "not-allowed", fontFamily: "'DM Mono', monospace", letterSpacing: 2 }}>
+          PUBLISH NFT
+        </button>
+      )}
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// EXPLORE TAB — real listings from MarketplaceV3
+// ─────────────────────────────────────────────────────────────
+function ExploreTab({ onBuy }: { onBuy: (l: Listing) => void }) {
+  const [listings, setListings] = useState<Listing[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all");
+
+  useEffect(() => {
+    async function fetchListings() {
+      try {
+        const data = await getAllValidListings({ contract: marketplace });
+        setListings(data as any);
+      } catch (e) {
+        console.error("Failed to fetch listings:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchListings();
+  }, []);
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["all", "sale", "drop"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{ padding: "6px 14px", borderRadius: 20, border: `1px solid ${filter === f ? "#ff3cac" : "#1a1a1a"}`, background: filter === f ? "rgba(255,60,172,0.1)" : "transparent", color: filter === f ? "#ff3cac" : "#444", fontSize: 11, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>{f}</button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: 40 }}>
+          <div style={{ fontSize: 30, animation: "spin 1s linear infinite" }}>⟳</div>
+        </div>
+      ) : listings.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 60 }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>◈</div>
+          <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 13 }}>No listings yet</div>
+          <div style={{ color: "#333", fontFamily: "'DM Mono', monospace", fontSize: 11, marginTop: 6 }}>Be the first to create one</div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          {listings.map(l => <NFTCard key={l.id.toString()} listing={l} onBuy={onBuy} />)}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -356,6 +442,7 @@ function CreateTab() {
 function ProfileTab() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 24, padding: 16, background: "#0d0d0d", borderRadius: 12, border: "1px solid #1a1a1a" }}>
@@ -371,7 +458,7 @@ function ProfileTab() {
         )}
       </div>
       <div style={{ color: "#444", fontSize: 12, fontFamily: "'DM Mono', monospace", textAlign: "center", padding: 40 }}>
-        {isConnected ? "NFTs you mint will appear here" : "Connect wallet to view your collection"}
+        {isConnected ? "Your minted NFTs will appear here" : "Connect wallet to view your collection"}
       </div>
     </div>
   );
@@ -382,12 +469,10 @@ function ProfileTab() {
 // ─────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("explore");
-  const [mintNft, setMintNft] = useState<NFT | null>(null);
-  const [filter, setFilter] = useState("all");
+  const [buyListing, setBuyListing] = useState<Listing | null>(null);
 
   useEffect(() => { sdk.actions.ready(); }, []);
 
-  const filtered = filter === "all" ? MOCK_NFTS : MOCK_NFTS.filter(n => n.type === filter);
   const tabs = [
     { id: "explore", icon: "◈", label: "Explore" },
     { id: "drops", icon: "⚡", label: "Drops" },
@@ -408,7 +493,6 @@ export default function App() {
         @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
       `}</style>
 
-      {/* Header */}
       <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid #111", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#070707", zIndex: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ width: 28, height: 28, borderRadius: 8, background: "linear-gradient(135deg, #ff3cac, #7b2fff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>◈</div>
@@ -420,52 +504,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* Content */}
       <div style={{ padding: "16px 16px 0" }}>
-        {tab === "explore" && (
-          <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-              {["all", "sale", "drop"].map(f => (
-                <button key={f} onClick={() => setFilter(f)} style={{ padding: "6px 14px", borderRadius: 20, border: `1px solid ${filter === f ? "#ff3cac" : "#1a1a1a"}`, background: filter === f ? "rgba(255,60,172,0.1)" : "transparent", color: filter === f ? "#ff3cac" : "#444", fontSize: 11, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>{f}</button>
-              ))}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {filtered.map(nft => <NFTCard key={nft.id} nft={nft} onMint={setMintNft} />)}
-            </div>
-          </>
-        )}
-
+        {tab === "explore" && <ExploreTab onBuy={setBuyListing} />}
         {tab === "drops" && (
-          <>
-            <div style={{ color: "#555", fontSize: 11, letterSpacing: 1, marginBottom: 14, fontFamily: "'DM Mono', monospace" }}>LIVE DROPS</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {MOCK_NFTS.filter(n => n.type === "drop").map(nft => (
-                <div key={nft.id} style={{ background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 12, padding: 14, display: "flex", gap: 12, alignItems: "center" }}>
-                  <img src={nft.image} style={{ width: 64, height: 64, borderRadius: 8, objectFit: "cover" }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ color: "#fff", fontWeight: 700, fontSize: 13, fontFamily: "'DM Mono', monospace" }}>{nft.name}</div>
-                    <div style={{ color: "#555", fontSize: 11, marginTop: 2, fontFamily: "'DM Mono', monospace" }}>by {nft.creator}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ height: 3, background: "#1a1a1a", borderRadius: 2, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${pct(nft.minted, nft.supply)}%`, background: "linear-gradient(90deg, #00d4ff, #7b2fff)" }} />
-                      </div>
-                      <div style={{ color: "#444", fontSize: 10, marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{nft.minted}/{nft.supply}</div>
-                    </div>
-                  </div>
-                  <button onClick={() => setMintNft(nft)} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "linear-gradient(135deg, #00d4ff, #7b2fff)", color: "#fff", fontWeight: 800, fontSize: 11, cursor: "pointer", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>
-                    MINT FREE
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>⚡</div>
+            <div style={{ color: "#555", fontFamily: "'DM Mono', monospace", fontSize: 13 }}>Live drops coming soon</div>
+          </div>
         )}
-
         {tab === "create" && <CreateTab />}
         {tab === "profile" && <ProfileTab />}
       </div>
 
-      {/* Bottom Nav */}
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "rgba(7,7,7,0.95)", borderTop: "1px solid #111", display: "flex", backdropFilter: "blur(20px)", zIndex: 20 }}>
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "12px 0 14px", border: "none", background: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, position: "relative" }}>
@@ -476,7 +526,7 @@ export default function App() {
         ))}
       </div>
 
-      {mintNft && <MintModal nft={mintNft} onClose={() => setMintNft(null)} />}
+      {buyListing && <BuyModal listing={buyListing} onClose={() => setBuyListing(null)} />}
     </div>
   );
 }
