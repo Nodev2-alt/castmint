@@ -46,35 +46,32 @@ async function deployNFTContract(
   name: string,
   symbol: string,
   metadataUri: string,
-  walletAddress: string
+  walletAddress: string,
+  sendTransaction: any
 ): Promise<string> {
-  // Deploy ERC-1155 via Thirdweb REST API
-  const res = await fetch("https://api.thirdweb.com/v1/deploy/8453/TokenERC1155", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-client-id": CLIENT_ID,
-    },
-    body: JSON.stringify({
-      constructorParams: [
-        walletAddress,
-        name,
-        symbol,
-        metadataUri,
-        walletAddress,
-        PLATFORM_FEE_RECEIVER,
-        500,
-        [],
-        walletAddress,
-      ],
-    }),
+  // Use Thirdweb TWFactory to deploy TokenERC1155
+  // TWFactory on Base: 0x5DBC7B840baa9daBcBe9D2492E45D7244B54A2A0
+  const TWFactory = getContract({
+    client,
+    chain: base,
+    address: "0x5DBC7B840baa9daBcBe9D2492E45D7244B54A2A0",
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.message || "Contract deployment failed");
-  }
-  const data = await res.json();
-  return data?.result?.deployedAddress || data?.deployedAddress || "pending";
+
+  const tx = prepareContractCall({
+    contract: TWFactory,
+    method: "function deployProxy(bytes32 _type, bytes _data) returns (address)",
+    params: [
+      "0x546f6b656e455243313135350000000000000000000000000000000000000000" as `0x${string}`, // keccak256("TokenERC1155")
+      ("0x" + Buffer.from(
+        new TextEncoder().encode(
+          JSON.stringify({ name, symbol, contractURI: metadataUri, defaultAdmin: walletAddress, royaltyRecipient: PLATFORM_FEE_RECEIVER, royaltyBps: 500, primarySaleRecipient: walletAddress })
+        )
+      ).toString('hex')) as `0x${string}`,
+    ],
+  });
+
+  const result = await sendTransaction(tx as any);
+  return typeof result === "string" ? result : "deployed";
 }
 
 
@@ -325,7 +322,8 @@ function CreateTab() {
         form.name,
         form.name.slice(0, 4).toUpperCase(),
         metaUrl,
-        address
+        address,
+        sendTransactionAsync
       );
       setContractAddress(deployTxHash);
 
