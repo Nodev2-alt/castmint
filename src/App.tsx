@@ -44,28 +44,38 @@ const ERC1155_BYTECODE = '0x60806040523480156200001157600080fd5b5060405162001a62
 
 async function deployNFTContract(
   name: string,
-  symbol: string, 
+  symbol: string,
   metadataUri: string,
-  sendTransaction: any
+  walletAddress: string
 ): Promise<string> {
-  const { ethers } = await import('ethers');
-  
-  // Encode constructor args
-  const abiCoder = ethers.AbiCoder.defaultAbiCoder();
-  const encodedArgs = abiCoder.encode(
-    ['string', 'string', 'string', 'address', 'uint96'],
-    [name, symbol, metadataUri, PLATFORM_FEE_RECEIVER, 500] // 5% royalty
-  );
-  
-  const deployData = ERC1155_BYTECODE + encodedArgs.slice(2);
-  
-  // Deploy via user wallet
-  const txHash = await sendTransaction({
-    to: undefined,
-    data: deployData as `0x${string}`,
+  // Deploy ERC-1155 via Thirdweb REST API
+  const res = await fetch("https://api.thirdweb.com/v1/deployer/contract", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-client-id": CLIENT_ID,
+    },
+    body: JSON.stringify({
+      contractType: "TokenERC1155",
+      chainId: 8453,
+      constructorParams: {
+        name,
+        symbol,
+        contractURI: metadataUri,
+        defaultAdmin: walletAddress,
+        royaltyRecipient: PLATFORM_FEE_RECEIVER,
+        royaltyBps: 500,
+        primarySaleRecipient: walletAddress,
+        trustedForwarders: [],
+      },
+    }),
   });
-  
-  return txHash as string;
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.message || "Contract deployment failed");
+  }
+  const data = await res.json();
+  return data?.result?.deployedAddress || data?.deployedAddress || "pending";
 }
 
 
@@ -73,6 +83,7 @@ async function deployNFTContract(
 // PINATA
 // ─────────────────────────────────────────────────────────────
 async function uploadImageToPinata(file: File): Promise<string> {
+  if (!PINATA_JWT) throw new Error("Pinata JWT not configured");
   const form = new FormData();
   form.append("file", file);
   const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
@@ -80,17 +91,22 @@ async function uploadImageToPinata(file: File): Promise<string> {
     headers: { Authorization: `Bearer ${PINATA_JWT}` },
     body: form,
   });
+  if (!res.ok) throw new Error(`Pinata upload failed: ${res.status}`);
   const data = await res.json();
+  if (!data.IpfsHash) throw new Error("Pinata: no IPFS hash returned");
   return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
 }
 
 async function uploadMetaToPinata(meta: object): Promise<string> {
+  if (!PINATA_JWT) throw new Error("Pinata JWT not configured");
   const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
     method: "POST",
     headers: { Authorization: `Bearer ${PINATA_JWT}`, "Content-Type": "application/json" },
     body: JSON.stringify({ pinataContent: meta }),
   });
+  if (!res.ok) throw new Error(`Pinata metadata upload failed: ${res.status}`);
   const data = await res.json();
+  if (!data.IpfsHash) throw new Error("Pinata: no metadata hash returned");
   return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
 }
 
@@ -310,7 +326,7 @@ function CreateTab() {
         form.name,
         form.name.slice(0, 4).toUpperCase(),
         metaUrl,
-        sendTransactionAsync
+        address
       );
       setContractAddress(deployTxHash);
 
@@ -387,7 +403,7 @@ function CreateTab() {
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>
-        <div style={{ flex: 2 }}><label style={lbl}>PRICE</label><input style={inp} placeholder="0.05" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
+        <div style={{ flex: 2 }}><label style={lbl}>PRICE {form.type === "drop" ? "(blank = free)" : ""}</label><input style={inp} placeholder={form.type === "drop" ? "0 = free mint" : "0.05"} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
         <div style={{ flex: 1 }}><label style={lbl}>TOKEN</label>
           <select style={inp} value={form.token} onChange={e => setForm({ ...form, token: e.target.value })}>
             <option>ETH</option><option>USDC</option><option>DEGEN</option>
