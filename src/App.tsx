@@ -313,7 +313,13 @@ function BuyModal({ listing, onClose }: { listing: Listing; onClose: () => void 
 function CreateTab() {
   const { address } = useAccount();
   const { connect, connectors } = useConnect();
-  const [form, setForm] = useState({ name: "", desc: "", price: "", token: "USDC", supply: "100", type: "sale", contractAddress: "" });
+  const [form, setForm] = useState({
+    name: "", symbol: "", desc: "", price: "", token: "ETH",
+    supply: "100", type: "sale", contractAddress: "",
+    startDate: "", startTime: "", endDate: "", endTime: "",
+    maxPerWallet: "1000", royalty: "5",
+    twitter: "", website: "", discord: ""
+  });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "uploading" | "deploying" | "listing" | "done">("form");
@@ -375,6 +381,14 @@ function CreateTab() {
         token: form.token,
         type: form.type,
         supply: form.supply,
+        symbol: form.symbol,
+        maxPerWallet: form.maxPerWallet,
+        royalty: form.royalty,
+        startDate: form.startDate,
+        endDate: form.endDate,
+        twitter: form.twitter,
+        website: form.website,
+        discord: form.discord,
       });
 
       setStep("done");
@@ -419,8 +433,9 @@ function CreateTab() {
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div onClick={() => fileRef.current?.click()} style={{ height: 180, borderRadius: 12, border: "2px dashed #222", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", background: "#0d0d0d" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, paddingBottom: 20 }}>
+      {/* Image Upload */}
+      <div onClick={() => fileRef.current?.click()} style={{ height: 200, borderRadius: 12, border: "2px dashed #222", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", overflow: "hidden", background: "#0d0d0d" }}>
         {preview ? <img src={preview} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
           <div style={{ textAlign: "center" }}>
             <div style={{ fontSize: 28, marginBottom: 8 }}>🖼</div>
@@ -430,30 +445,71 @@ function CreateTab() {
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImage} />
       </div>
 
-      <div><label style={lbl}>NFT NAME</label><input style={inp} placeholder="e.g. Void Bloom #001" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
-      <div><label style={lbl}>DESCRIPTION</label><textarea style={{ ...inp, height: 68, resize: "none" } as React.CSSProperties} placeholder="Describe your NFT..." value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} /></div>
+      {/* Name + Symbol */}
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 2 }}><label style={lbl}>COLLECTION NAME</label><input style={inp} placeholder="e.g. Void Bloom" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
+        <div style={{ flex: 1 }}><label style={lbl}>SYMBOL</label><input style={inp} placeholder="VOID" value={form.symbol} onChange={e => setForm({ ...form, symbol: e.target.value.toUpperCase() })} /></div>
+      </div>
 
+      {/* Description */}
+      <div><label style={lbl}>DESCRIPTION</label><textarea style={{ ...inp, height: 72, resize: "none" } as React.CSSProperties} placeholder="Describe your collection..." value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} /></div>
+
+      {/* Type */}
       <div><label style={lbl}>TYPE</label>
         <div style={{ display: "flex", gap: 8 }}>
-          {["sale", "drop"].map(t => (
-            <button key={t} onClick={() => setForm({ ...form, type: t })} style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: `1px solid ${form.type === t ? "#ff3cac" : "#222"}`, background: form.type === t ? "rgba(255,60,172,0.1)" : "transparent", color: form.type === t ? "#ff3cac" : "#555", fontFamily: "'DM Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1, textTransform: "uppercase" }}>{t}</button>
+          {[["sale", "SALE"], ["drop", "DROP"]].map(([t, l]) => (
+            <button key={t} onClick={() => setForm({ ...form, type: t })} style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: `1px solid ${form.type === t ? "#ff3cac" : "#222"}`, background: form.type === t ? "rgba(255,60,172,0.1)" : "transparent", color: form.type === t ? "#ff3cac" : "#555", fontFamily: "'DM Mono', monospace", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>{l}</button>
           ))}
         </div>
       </div>
 
+      {/* Price + Token */}
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 2 }}><label style={lbl}>PRICE {form.type === "drop" ? "(blank = free)" : ""}</label><input style={inp} placeholder={form.type === "drop" ? "0 = free mint" : "0.05"} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></div>
         <div style={{ flex: 1 }}><label style={lbl}>TOKEN</label>
           <select style={inp} value={form.token} onChange={e => setForm({ ...form, token: e.target.value })}>
-            <option>ETH</option><option>USDC</option><option>DEGEN</option>
+            <option>ETH</option><option>USDC</option>
           </select>
         </div>
       </div>
 
-      <div><label style={lbl}>SUPPLY</label><input style={inp} type="number" placeholder="100" value={form.supply} onChange={e => setForm({ ...form, supply: e.target.value })} /></div>
+      {/* Supply + Max per wallet */}
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1 }}><label style={lbl}>SUPPLY</label><input style={inp} type="number" placeholder="100" value={form.supply} onChange={e => setForm({ ...form, supply: e.target.value })} /></div>
+        <div style={{ flex: 1 }}><label style={lbl}>MAX/WALLET</label><input style={inp} type="number" placeholder="1000" value={form.maxPerWallet} onChange={e => setForm({ ...form, maxPerWallet: e.target.value })} /></div>
+      </div>
 
+      {/* Mint Start */}
+      <div><label style={lbl}>MINT START</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inp, flex: 1 }} type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} />
+          <input style={{ ...inp, flex: 1 }} type="time" value={form.startTime} onChange={e => setForm({ ...form, startTime: e.target.value })} />
+        </div>
+      </div>
+
+      {/* Mint End */}
+      <div><label style={lbl}>MINT END</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...inp, flex: 1 }} type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} />
+          <input style={{ ...inp, flex: 1 }} type="time" value={form.endTime} onChange={e => setForm({ ...form, endTime: e.target.value })} />
+        </div>
+      </div>
+
+      {/* Royalty */}
+      <div><label style={lbl}>CREATOR ROYALTY %</label><input style={inp} type="number" placeholder="5" min="0" max="10" value={form.royalty} onChange={e => setForm({ ...form, royalty: e.target.value })} /></div>
+
+      {/* Social Links */}
+      <div><label style={lbl}>SOCIAL LINKS (OPTIONAL)</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <input style={inp} placeholder="🌐 Website" value={form.website} onChange={e => setForm({ ...form, website: e.target.value })} />
+          <input style={inp} placeholder="𝕏 Twitter" value={form.twitter} onChange={e => setForm({ ...form, twitter: e.target.value })} />
+          <input style={inp} placeholder="💬 Discord" value={form.discord} onChange={e => setForm({ ...form, discord: e.target.value })} />
+        </div>
+      </div>
+
+      {/* Fee info */}
       <div style={{ background: "#0d0d0d", border: "1px solid #1a1a1a", borderRadius: 10, padding: 12 }}>
-        {[["Platform fee", "$0.15 USDC per mint"], ["Secondary royalty", "5% → you"], ["Marketplace", "CASTMINT on Base"]].map(([l, v]) => (
+        {[["Platform fee", "$0.15 ETH per mint"], ["Secondary royalty", `${form.royalty}% → you`], ["Listed on", "CASTMINT + OpenSea"]].map(([l, v]) => (
           <div key={l} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 11, fontFamily: "'DM Mono', monospace" }}>
             <span style={{ color: "#444" }}>{l}</span><span style={{ color: "#666" }}>{v}</span>
           </div>
