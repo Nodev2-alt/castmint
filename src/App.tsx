@@ -50,25 +50,40 @@ async function deployNFTContract(
   walletAddress: string,
   sendTransaction: any
 ): Promise<string> {
-  // Use Thirdweb TWFactory to deploy TokenERC1155
-  // TWFactory on Base: 0x5DBC7B840baa9daBcBe9D2492E45D7244B54A2A0
+  const { ethers } = await import("ethers");
+
+  // TokenERC1155 constructor ABI encoding
+  // constructor(address _defaultAdmin, string _name, string _symbol, string _contractURI, address[] _trustedForwarders, address _primarySaleRecipient, address _royaltyRecipient, uint128 _royaltyBps, uint128 _platformFeeBps, address _platformFeeRecipient)
+  const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+  const initData = abiCoder.encode(
+    ["address", "string", "string", "string", "address[]", "address", "address", "uint128", "uint128", "address"],
+    [
+      walletAddress,          // _defaultAdmin
+      name,                   // _name
+      symbol,                 // _symbol
+      metadataUri,            // _contractURI
+      [],                     // _trustedForwarders
+      walletAddress,          // _primarySaleRecipient
+      PLATFORM_FEE_RECEIVER,  // _royaltyRecipient
+      500,                    // _royaltyBps (5%)
+      100,                    // _platformFeeBps (1%)
+      PLATFORM_FEE_RECEIVER,  // _platformFeeRecipient
+    ]
+  );
+
   const TWFactory = getContract({
     client,
     chain: base,
     address: "0x5DBC7B840baa9daBcBe9D2492E45D7244B54A2A0",
   });
 
+  // keccak256("TokenERC1155") as bytes32
+  const contractType = ethers.id("TokenERC1155").slice(0, 66).padEnd(66, "0") as `0x${string}`;
+
   const tx = prepareContractCall({
     contract: TWFactory,
     method: "function deployProxy(bytes32 _type, bytes _data) returns (address)",
-    params: [
-      "0x546f6b656e455243313135350000000000000000000000000000000000000000" as `0x${string}`, // keccak256("TokenERC1155")
-      ("0x" + Array.from(
-        new TextEncoder().encode(
-          JSON.stringify({ name, symbol, contractURI: metadataUri, defaultAdmin: walletAddress, royaltyRecipient: PLATFORM_FEE_RECEIVER, royaltyBps: 500, primarySaleRecipient: walletAddress })
-        )
-      ).map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`,
-    ],
+    params: [contractType, initData as `0x${string}`],
   });
 
   const result = await sendTransaction(tx as any);
