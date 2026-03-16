@@ -1,13 +1,13 @@
 import { sdk } from "@farcaster/miniapp-sdk";
 import { useEffect, useState, useRef } from "react";
-import { useAccount, useConnect } from "wagmi";
+import { useAccount, useConnect, useSendTransaction } from "wagmi";
 import {
   createThirdwebClient,
   getContract,
   prepareContractCall,
 } from "thirdweb";
 import { base } from "thirdweb/chains";
-import { useSendTransaction } from "thirdweb/react";
+
 import { getAllValidListings, buyFromListing } from "thirdweb/extensions/marketplace";
 
 import { parseUnits, encodeFunctionData } from "viem";
@@ -228,7 +228,7 @@ function BuyModal({ listing, onClose }: { listing: Listing; onClose: () => void 
 function CreateTab() {
   const { address } = useAccount();
   const { connect, connectors } = useConnect();
-  const [form, setForm] = useState({ name: "", desc: "", price: "", token: "USDC", supply: "100", type: "sale" });
+  const [form, setForm] = useState({ name: "", desc: "", price: "", token: "USDC", supply: "100", type: "sale", contractAddress: "" });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "uploading" | "deploying" | "listing" | "done">("form");
@@ -250,33 +250,34 @@ function CreateTab() {
     if (!address || !form.name || !imageFile) return;
     setError("");
     try {
+      // 1. Upload image + metadata to Pinata IPFS
       setStep("uploading");
       const imageUrl = await uploadImageToPinata(imageFile);
-      await uploadMetaToPinata({ name: form.name, description: form.desc, image: imageUrl });
-
-      setStep("deploying");
-      const deployed = await deployERC1155Contract({
-        client,
-        chain: base,
-        account: { address: address as `0x${string}`, sendTransaction: sendTransactionAsync as any } as any,
-        params: {
-          name: form.name,
-          symbol: form.name.slice(0, 4).toUpperCase(),
-          description: form.desc,
-          image: imageUrl,
-          primary_sale_recipient: address,
-          fee_recipient: PLATFORM_FEE_RECEIVER,
-          seller_fee_basis_points: 500,
-        },
+      const metaUrl = await uploadMetaToPinata({
+        name: form.name,
+        description: form.desc,
+        image: imageUrl,
+        attributes: [{ trait_type: "Type", value: form.type }]
       });
-      setContractAddress(deployed);
 
+      // 2. Pay /bin/sh.15 USDC platform fee
+      setStep("deploying");
+      const feeData = encodeFunctionData({
+        abi: [{ name: "transfer", type: "function", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }],
+        functionName: "transfer",
+        args: [PLATFORM_FEE_RECEIVER as `0x${string}`, PLATFORM_FEE],
+      });
+      const feeTx = await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
+      setContractAddress(typeof feeTx === "string" ? feeTx : "");
+
+      // 3. List on MarketplaceV3 using user contract address if provided
       setStep("listing");
+      const contractToList = form.contractAddress || PLATFORM_FEE_RECEIVER;
       const listTx = prepareContractCall({
         contract: marketplace,
         method: "function createListing((address assetContract,uint256 tokenId,uint256 quantity,address currency,uint256 pricePerToken,uint128 startTimestamp,uint128 endTimestamp,bool reserved) _params) returns (uint256 listingId)",
         params: [{
-          assetContract: deployed as `0x${string}`,
+          assetContract: contractToList as `0x${string}`,
           tokenId: BigInt(0),
           quantity: BigInt(form.supply || 100),
           currency: USDC_BASE as `0x${string}`,
