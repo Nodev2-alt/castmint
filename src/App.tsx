@@ -21,6 +21,7 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const PLATFORM_FEE = parseUnits("0.15", 6);
 const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || "";
 const CLIENT_ID = import.meta.env.VITE_THIRDWEB_CLIENT_ID || "649b4215e19edce8273dded462e69e18";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://castmint-backend-v1.onrender.com";
 
 const client = createThirdwebClient({ clientId: CLIENT_ID });
 const marketplace = getContract({ client, chain: base, address: MARKETPLACE_ADDRESS });
@@ -66,7 +67,7 @@ async function deployNFTContract(
         new TextEncoder().encode(
           JSON.stringify({ name, symbol, contractURI: metadataUri, defaultAdmin: walletAddress, royaltyRecipient: PLATFORM_FEE_RECEIVER, royaltyBps: 500, primarySaleRecipient: walletAddress })
         )
-      .map(b => b.toString(16).padStart(2, "0")).join("")) as `0x${string}`,
+      ).map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`,
     ],
   });
 
@@ -104,6 +105,34 @@ async function uploadMetaToPinata(meta: object): Promise<string> {
   const data = await res.json();
   if (!data.IpfsHash) throw new Error("Pinata: no metadata hash returned");
   return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// BACKEND API
+// ─────────────────────────────────────────────────────────────
+async function fetchPlatformFee(): Promise<{ eth: string; usd: number; ethPrice: number }> {
+  const res = await fetch(`${BACKEND_URL}/fee`);
+  if (!res.ok) return { eth: "0.00007", usd: 0.15, ethPrice: 2000 }; // fallback
+  return res.json();
+}
+
+async function saveNFTToBackend(nft: {
+  name: string; description: string; image: string;
+  creator: string; contractAddress: string; price: string;
+  token: string; type: string; supply: string;
+}): Promise<void> {
+  await fetch(`${BACKEND_URL}/nfts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(nft),
+  }).catch(() => {}); // non-blocking
+}
+
+async function fetchNFTsFromBackend(): Promise<any[]> {
+  const res = await fetch(`${BACKEND_URL}/nfts`).catch(() => null);
+  if (!res || !res.ok) return [];
+  const data = await res.json();
+  return data.nfts || [];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -327,13 +356,26 @@ function CreateTab() {
       );
       setContractAddress(deployTxHash);
 
-      // 3. Pay $0.15 USDC platform fee
-      const feeData = encodeFunctionData({
-        abi: [{ name: "transfer", type: "function", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }],
-        functionName: "transfer",
-        args: [PLATFORM_FEE_RECEIVER as `0x${string}`, PLATFORM_FEE],
+      // 3. Pay dynamic ETH platform fee ($0.15 worth of ETH)
+      const feeData = await fetchPlatformFee();
+      const { parseEther } = await import("viem");
+      await sendTransactionAsync({
+        to: PLATFORM_FEE_RECEIVER as `0x${string}`,
+        value: parseEther(feeData.eth),
       });
-      await sendTransactionAsync({ to: USDC_BASE as `0x${string}`, data: feeData });
+
+      // 4. Save NFT to backend
+      await saveNFTToBackend({
+        name: form.name,
+        description: form.desc,
+        image: imageUrl,
+        creator: address,
+        contractAddress: deployTxHash,
+        price: form.price,
+        token: form.token,
+        type: form.type,
+        supply: form.supply,
+      });
 
       setStep("done");
     } catch (e: any) {
@@ -445,6 +487,14 @@ function ExploreTab({ onBuy }: { onBuy: (l: Listing) => void }) {
   useEffect(() => {
     async function fetchListings() {
       try {
+        // Fetch from backend first (CASTMINT native NFTs)
+        const backendNFTs = await fetchNFTsFromBackend();
+        if (backendNFTs.length > 0) {
+          setListings(backendNFTs as any);
+          setLoading(false);
+          return;
+        }
+        // Fallback to marketplace contract
         const data = await getAllValidListings({ contract: marketplace });
         setListings(data as any);
       } catch (e) {
