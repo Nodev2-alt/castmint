@@ -62,11 +62,11 @@ async function deployNFTContract(
     method: "function deployProxy(bytes32 _type, bytes _data) returns (address)",
     params: [
       "0x546f6b656e455243313135350000000000000000000000000000000000000000" as `0x${string}`, // keccak256("TokenERC1155")
-      ("0x" + Buffer.from(
+      ("0x" + Array.from(
         new TextEncoder().encode(
           JSON.stringify({ name, symbol, contractURI: metadataUri, defaultAdmin: walletAddress, royaltyRecipient: PLATFORM_FEE_RECEIVER, royaltyBps: 500, primarySaleRecipient: walletAddress })
         )
-      ).toString('hex')) as `0x${string}`,
+      .map(b => b.toString(16).padStart(2, "0")).join("")) as `0x${string}`,
     ],
   });
 
