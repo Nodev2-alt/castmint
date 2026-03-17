@@ -19,7 +19,7 @@ const PLATFORM_FEE_RECEIVER = "0x2805e9dbce2839c5feae858723f9499f15fd88cf";
 const MARKETPLACE_ADDRESS = "0x974D2aDb187d2E100AF48d2A14Ce5e335F3A1A32";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const PLATFORM_FEE = parseUnits("0.15", 6);
-const PINATA_JWT = import.meta.env.VITE_PINATA_JWT || "";
+const NFT_STORAGE_KEY = import.meta.env.VITE_NFT_STORAGE_KEY || "";
 const CLIENT_ID = import.meta.env.VITE_THIRDWEB_CLIENT_ID || "649b4215e19edce8273dded462e69e18";
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://castmint-backend-v1.onrender.com";
 
@@ -94,32 +94,31 @@ async function deployNFTContract(
 // ─────────────────────────────────────────────────────────────
 // PINATA
 // ─────────────────────────────────────────────────────────────
-async function uploadImageToPinata(file: File): Promise<string> {
-  if (!PINATA_JWT) throw new Error("Pinata JWT not configured");
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+async function uploadImageToIPFS(file: File): Promise<string> {
+  if (!NFT_STORAGE_KEY) throw new Error("NFT Storage key not configured");
+  const res = await fetch("https://api.nft.storage/upload", {
     method: "POST",
-    headers: { Authorization: `Bearer ${PINATA_JWT}` },
-    body: form,
+    headers: { Authorization: `Bearer ${NFT_STORAGE_KEY}` },
+    body: file,
   });
-  if (!res.ok) throw new Error(`Pinata upload failed: ${res.status}`);
+  if (!res.ok) throw new Error(`NFT.Storage upload failed: ${res.status}`);
   const data = await res.json();
-  if (!data.IpfsHash) throw new Error("Pinata: no IPFS hash returned");
-  return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
+  if (!data.value?.cid) throw new Error("NFT.Storage: no CID returned");
+  return `https://ipfs.io/ipfs/${data.value.cid}`;
 }
 
-async function uploadMetaToPinata(meta: object): Promise<string> {
-  if (!PINATA_JWT) throw new Error("Pinata JWT not configured");
-  const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+async function uploadMetaToIPFS(meta: object): Promise<string> {
+  if (!NFT_STORAGE_KEY) throw new Error("NFT Storage key not configured");
+  const blob = new Blob([JSON.stringify(meta)], { type: "application/json" });
+  const res = await fetch("https://api.nft.storage/upload", {
     method: "POST",
-    headers: { Authorization: `Bearer ${PINATA_JWT}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ pinataContent: meta }),
+    headers: { Authorization: `Bearer ${NFT_STORAGE_KEY}` },
+    body: blob,
   });
-  if (!res.ok) throw new Error(`Pinata metadata upload failed: ${res.status}`);
+  if (!res.ok) throw new Error(`NFT.Storage metadata upload failed: ${res.status}`);
   const data = await res.json();
-  if (!data.IpfsHash) throw new Error("Pinata: no metadata hash returned");
-  return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
+  if (!data.value?.cid) throw new Error("NFT.Storage: no metadata CID returned");
+  return `https://ipfs.io/ipfs/${data.value.cid}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -358,8 +357,8 @@ function CreateTab() {
     try {
       // 1. Upload image + metadata to Pinata IPFS
       setStep("uploading");
-      const imageUrl = await uploadImageToPinata(imageFile);
-      const metaUrl = await uploadMetaToPinata({
+      const imageUrl = await uploadImageToIPFS(imageFile);
+      const metaUrl = await uploadMetaToIPFS({
         name: form.name,
         description: form.desc,
         image: imageUrl,
