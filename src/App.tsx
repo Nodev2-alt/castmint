@@ -19,7 +19,7 @@ const PLATFORM_FEE_RECEIVER = "0x2805e9dbce2839c5feae858723f9499f15fd88cf";
 const MARKETPLACE_ADDRESS = "0x974D2aDb187d2E100AF48d2A14Ce5e335F3A1A32";
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const PLATFORM_FEE = parseUnits("0.15", 6);
-const NFT_STORAGE_KEY = import.meta.env.VITE_NFT_STORAGE_KEY || "";
+// Image uploads go through backend which handles Pinata JWT securely
 const CLIENT_ID = import.meta.env.VITE_THIRDWEB_CLIENT_ID || "649b4215e19edce8273dded462e69e18";
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://castmint-backend-v1.onrender.com";
 
@@ -95,30 +95,34 @@ async function deployNFTContract(
 // PINATA
 // ─────────────────────────────────────────────────────────────
 async function uploadImageToIPFS(file: File): Promise<string> {
-  if (!NFT_STORAGE_KEY) throw new Error("NFT Storage key not configured");
-  const res = await fetch("https://api.nft.storage/upload", {
+  // Step 1: Get presigned URL from our backend (JWT stays safe on server)
+  const urlRes = await fetch(`${BACKEND_URL}/upload-url`);
+  if (!urlRes.ok) throw new Error("Failed to get upload URL");
+  const { url } = await urlRes.json();
+
+  // Step 2: Upload directly to Pinata using presigned URL
+  const uploadRes = await fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${NFT_STORAGE_KEY}` },
     body: file,
   });
-  if (!res.ok) throw new Error(`NFT.Storage upload failed: ${res.status}`);
-  const data = await res.json();
-  if (!data.value?.cid) throw new Error("NFT.Storage: no CID returned");
-  return `https://ipfs.io/ipfs/${data.value.cid}`;
+  if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+  const data = await uploadRes.json();
+  const cid = data.cid || data.IpfsHash;
+  if (!cid) throw new Error("No CID returned from upload");
+  return `https://gateway.pinata.cloud/ipfs/${cid}`;
 }
 
 async function uploadMetaToIPFS(meta: object): Promise<string> {
-  if (!NFT_STORAGE_KEY) throw new Error("NFT Storage key not configured");
-  const blob = new Blob([JSON.stringify(meta)], { type: "application/json" });
-  const res = await fetch("https://api.nft.storage/upload", {
+  // Upload metadata JSON through backend
+  const res = await fetch(`${BACKEND_URL}/upload-meta`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${NFT_STORAGE_KEY}` },
-    body: blob,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(meta),
   });
-  if (!res.ok) throw new Error(`NFT.Storage metadata upload failed: ${res.status}`);
+  if (!res.ok) throw new Error(`Metadata upload failed: ${res.status}`);
   const data = await res.json();
-  if (!data.value?.cid) throw new Error("NFT.Storage: no metadata CID returned");
-  return `https://ipfs.io/ipfs/${data.value.cid}`;
+  if (!data.url) throw new Error("No URL returned from metadata upload");
+  return data.url;
 }
 
 // ─────────────────────────────────────────────────────────────
